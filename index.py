@@ -145,7 +145,7 @@ def get_item_data(item_id, item_name):
         items(ids: [{item_id}]) {{
             id
             name
-            column_values(ids: ["color_mks7xywc", "numeric_mks61nvq", "numeric_mksxcdva"]) {{
+            column_values(ids: ["numeric_mks63qc1", "numeric_mks64nh2", "color_mks7xywc", "numeric_mks61nvq"]) {{
                 id
                 value
             }}
@@ -159,9 +159,10 @@ def get_item_data(item_id, item_name):
     item_data = {
         "id": item_id,
         "name": item_name,
+        "numeric_mks63qc1": 0,
+        "numeric_mks64nh2": 0,
         "color_mks7xywc": "",
-        "numeric_mks61nvq": 0,
-        "numeric_mksxcdva": 0
+        "numeric_mks61nvq": 0
     }
 
     try:
@@ -173,7 +174,25 @@ def get_item_data(item_id, item_name):
         if items:
             item = items[0]
             for col in item.get("column_values", []):
-                if col["id"] == "color_mks7xywc":
+                if col["id"] == "numeric_mks63qc1":
+                    try:
+                        # Monday.com returns numeric values as quoted strings
+                        value_str = col["value"] or "0"
+                        # Remove quotes if present
+                        if value_str.startswith('"') and value_str.endswith('"'):
+                            value_str = value_str[1:-1]
+                        item_data["numeric_mks63qc1"] = float(value_str)
+                    except (ValueError, TypeError):
+                        item_data["numeric_mks63qc1"] = 0
+                elif col["id"] == "numeric_mks64nh2":
+                    try:
+                        value_str = col["value"] or "0"
+                        if value_str.startswith('"') and value_str.endswith('"'):
+                            value_str = value_str[1:-1]
+                        item_data["numeric_mks64nh2"] = float(value_str)
+                    except (ValueError, TypeError):
+                        item_data["numeric_mks64nh2"] = 0
+                elif col["id"] == "color_mks7xywc":
                     item_data["color_mks7xywc"] = col["value"] or ""
                 elif col["id"] == "numeric_mks61nvq":
                     try:
@@ -183,14 +202,6 @@ def get_item_data(item_id, item_name):
                         item_data["numeric_mks61nvq"] = float(value_str)
                     except (ValueError, TypeError):
                         item_data["numeric_mks61nvq"] = 0
-                elif col["id"] == "numeric_mksxcdva":
-                    try:
-                        value_str = col["value"] or "0"
-                        if value_str.startswith('"') and value_str.endswith('"'):
-                            value_str = value_str[1:-1]
-                        item_data["numeric_mksxcdva"] = float(value_str)
-                    except (ValueError, TypeError):
-                        item_data["numeric_mksxcdva"] = 0
     except Exception as e:
         logger.error(f"Error parsing item data response: {e}")
 
@@ -308,25 +319,24 @@ def delete_item(item_id, board_id="9431861361"):
         logger.error(f"Failed to delete item {item_id}")
         return False
 
-def distribute_values(item_data, max_splits=None):
+def distribute_values(item_data):
     """
     Main logic for distributing values across subitems
-    Distributes numeric_mks61nvq value and saves numeric_mksxcdva to eligible subitems
-    max_splits: if set, limits the number of subitems that can be split
     """
     try:
         # Extract data from payload
-        limit_value = float(item_data.get("numeric_mks61nvq", 0))
-        numeric_value_to_save = float(item_data.get("numeric_mksxcdva", 0))
+        numeric_value = float(item_data.get("numeric_mks63qc1", 0))
+        formula_value = float(item_data.get("numeric_mks64nh2", 0))
         currency_dropdown = item_data.get("color_mks7xywc", "")
+        limit_value = float(item_data.get("numeric_mks61nvq", 0))
         item_name = item_data.get("name", "")
         item_id = item_data.get("id", "")
 
         logger.info(f"Processing item: {item_name} (ID: {item_id})")
-        logger.info(f"Values - Limit to distribute: {limit_value}, Value to save: {numeric_value_to_save}, Currency: {currency_dropdown}")
+        logger.info(f"Values - Numeric: {numeric_value}, Formula: {formula_value}, Currency: {currency_dropdown}, Limit: {limit_value}")
 
         # Determine group based on currency - handle status column format
-        group_id = "group_mks6z9xe"
+        group_id = "group_mks6z9xe"  # Both currencies use the same group
 
         # Check if we have a valid currency status value
         valid_currency = False
@@ -378,11 +388,19 @@ def distribute_values(item_data, max_splits=None):
             logger.warning(f"No subitems found for parent item '{item_name}' in group '{group_id}'")
             return {"message": f"No subitems found for parent item '{item_name}' in group '{group_id}'"}, 200
 
-        # Find eligible subitems with "Parte Terrestre Internacional" status and empty numeric_mks6p0bv
+        # Debug: Log detailed information about the first few subitems to understand the data structure
+        logger.debug(f"Total subitems found: {len(subitems)}")
+        for i, subitem in enumerate(subitems[:3]):  # Log first 3 subitems
+            logger.debug(f"Subitem {i+1} ({subitem.get('name')}): {json.dumps(subitem, indent=2)}")
+
+        # Find the next eligible subitem with empty numeric_mks6p0bv to start processing
+        # Valid status values for eligible "tipo" values
         valid_status_values = [
             "Parte Terrestre Internacional"
         ]
 
+        # Find the starting point - first subitem with empty numeric_mks6p0bv and eligible tipo
+        start_index = None
         eligible_subitems = []
 
         for i, subitem in enumerate(subitems):
@@ -414,269 +432,404 @@ def distribute_values(item_data, max_splits=None):
                         numeric_mks6p0bv_value = 0
 
             # Check if subitem has eligible tipo and is empty
-            if status_text in valid_status_values and numeric_mks6p0bv_value == 0:
+            if status_text in valid_status_values:
                 eligible_subitems.append({
                     'subitem': subitem,
                     'index': i,
+                    'is_empty': numeric_mks6p0bv_value == 0,
                     'status_text': status_text
                 })
-                logger.info(f"Found eligible subitem: {subitem.get('name')} (index {i}) with tipo: {status_text}")
+
+                # Mark the first empty eligible subitem as starting point
+                if numeric_mks6p0bv_value == 0 and start_index is None:
+                    start_index = i
+                    logger.info(f"Found starting point at subitem {subitem.get('name')} (index {i}) with tipo: {status_text}")
 
         if not eligible_subitems:
-            logger.warning("No eligible empty subitems found")
-            return {"message": "No eligible empty subitems found"}, 200
+            logger.warning("No subitems found with eligible tipo status values")
+            return {"message": "No subitems found with eligible tipo status values"}, 200
 
-        logger.info(f"Found {len(eligible_subitems)} eligible subitems to process")
+        # Log all eligible subitems found for debugging
+        logger.info(f"Found {len(eligible_subitems)} eligible subitems:")
+        for item in eligible_subitems:
+            status = "empty" if item['is_empty'] else "processed"
+            logger.info(f"  - '{item['subitem']['name']}' (index {item['index']}): {status} - tipo: {item['status_text']}")
 
-        # Determine deduction column based on currency
+        if start_index is None:
+            logger.info("All eligible subitems already processed")
+
+            # Log detailed status for debugging
+            status_summary = {}
+            for item in eligible_subitems:
+                status = "processed" if not item['is_empty'] else "empty"
+                if status not in status_summary:
+                    status_summary[status] = 0
+                status_summary[status] += 1
+                logger.info(f"Subitem '{item['subitem']['name']}' (index {item['index']}): {status} - tipo: {item['status_text']}")
+
+            logger.info(f"Eligible subitems status: {status_summary}")
+            return {
+                "message": "All eligible subitems already processed",
+                "status_summary": status_summary,
+                "total_eligible": len(eligible_subitems)
+            }, 200
+
+        # Get all empty eligible subitems to process
+        unprocessed_subitems = [item['subitem'] for item in eligible_subitems if item['is_empty']]
+
+        logger.info(f"Starting distribution from index {start_index}, found {len(unprocessed_subitems)} empty eligible subitems to process")
+
+        # Check for leftover sum from previous webhook execution
+        leftover_sum = 0
+        leftover_subitem_id = None
+        leftover_numeric_value = 0  # Store the original numeric_mks6p0bv value to reuse
+
+        # Look for the last eligible subitem with a value in numeric_mksxv8ep
+        for item in reversed(eligible_subitems):  # Start from the last
+            subitem = item['subitem']
+            found_leftover = False
+
+            # First check if this subitem has a leftover sum
+            for col in subitem.get("column_values", []):
+                if col["id"] == "numeric_mksxv8ep":
+                    try:
+                        value_str = col["value"] or "0"
+                        if value_str.startswith('"') and value_str.endswith('"'):
+                            value_str = value_str[1:-1]
+                        potential_leftover = float(value_str)
+                        if potential_leftover > 0:
+                            leftover_sum = potential_leftover
+                            leftover_subitem_id = subitem["id"]
+                            found_leftover = True
+                            logger.info(f"Found leftover sum {leftover_sum} in subitem {subitem['name']} (ID: {leftover_subitem_id})")
+                            break
+                    except (ValueError, TypeError):
+                        continue
+
+            # If we found a leftover, get the numeric_mks6p0bv value from the same subitem
+            if found_leftover:
+                for col in subitem.get("column_values", []):
+                    if col["id"] == "numeric_mks6p0bv":
+                        try:
+                            value_str = col["value"] or "0"
+                            if value_str.startswith('"') and value_str.endswith('"'):
+                                value_str = value_str[1:-1]
+                            leftover_numeric_value = float(value_str)
+                            logger.info(f"Found original numeric_mks6p0bv value {leftover_numeric_value} from leftover subitem {subitem['name']}")
+                        except (ValueError, TypeError):
+                            leftover_numeric_value = 0
+                        break
+                break  # Exit the main loop since we found the leftover
+
+        # Clear the leftover sum from the previous subitem if found
+        if leftover_subitem_id and leftover_sum > 0:
+            subitem_board_id = "9431861361"  # Default subitem board ID
+            clear_response = update_subitem_column(leftover_subitem_id, "numeric_mksxv8ep", 0, subitem_board_id)
+            if not clear_response:
+                logger.error(f"Failed to clear leftover sum from source subitem {leftover_subitem_id}: response was None")
+            elif clear_response.get("data", {}).get("change_column_value", {}).get("id"):
+                logger.info(f"Successfully cleared leftover sum from source subitem {leftover_subitem_id}")
+            else:
+                logger.error(f"Failed to clear leftover sum from source subitem {leftover_subitem_id}: {clear_response}")
+
+
+        # Distribute values across multiple subitems using sequential remainder logic
+        # Start with leftover sum first, then add limit_value for subsequent processing
+        remaining_value = leftover_sum
+        total_to_distribute = leftover_sum + limit_value
+        logger.info(f"Starting distribution with leftover_sum: {leftover_sum} + limit_value: {limit_value} = total: {total_to_distribute}")
+        processed_subitems = []
+
+        # Determine deduction column based on currency (is_dollar was set above)
         deduction_column = "numeric_mks6ywg8"  # Default to Euro column
+
         if is_dollar:
             deduction_column = "numeric_mks6myhs"
 
-        logger.info(f"Using deduction column: {deduction_column} for currency (is_dollar: {is_dollar})")
+        logger.info(f"Starting sequential distribution from total {total_to_distribute} across {len(unprocessed_subitems)} eligible subitems")
+        logger.info(f"Will process leftover first (if any) with value {leftover_numeric_value}, then continue with webhook value {numeric_value}")
+        logger.info(f"Using deduction column: {deduction_column} for currency: {currency_dropdown} (is_dollar: {is_dollar})")
 
-        # Distribute the limit_value across eligible subitems
-        remaining_value = limit_value
-        processed_subitems = []
-        last_eligible_numeric_mks6p0bv = numeric_value_to_save
-        splits_created = 0
+        # PHASE 1: Process leftover sum first (if any) - complete this phase entirely before webhook processing
+        leftover_finished = False
+        if leftover_sum > 0:
+            logger.info(f"PHASE 1: Processing leftover sum {leftover_sum} with numeric value {leftover_numeric_value}")
+            leftover_remaining = leftover_sum
 
-        for item in eligible_subitems:
-            if remaining_value <= 0:
-                break
+            # Create a separate copy to avoid modification during iteration
+            subitems_to_process = unprocessed_subitems[:]
+            phase1_complete = False
 
-            subitem = item['subitem']
-            subitem_board_id = subitem.get("board", {}).get("id", "9431861361")
-            
-            # Get subitem deduction value from numeric_mktm79z5 column
-            subitem_deduction_value = 0
-            for col in subitem.get("column_values", []):
-                if col["id"] == "numeric_mktm79z5":
-                    try:
-                        raw_value = col["value"] or "0"
-                        clean_value = raw_value.strip('"') if isinstance(raw_value, str) else str(raw_value)
-                        subitem_deduction_value = float(clean_value)
-                    except (ValueError, TypeError):
-                        subitem_deduction_value = 0
+            for subitem in subitems_to_process:
+                if phase1_complete or leftover_remaining <= 0:
+                    logger.info("Leftover sum exhausted, PHASE 1 complete")
+                    leftover_finished = True
                     break
 
-            # Process subitem if there's a deduction value in numeric_mktm79z5
-            if subitem_deduction_value > 0:
-                # Check condition: numeric_mktm79z5 > numeric_mktzwbep (subitem_deduction_value > remaining_value)
-                if subitem_deduction_value > remaining_value:
-                    # Check if we've reached the split limit
-                    if max_splits is not None and splits_created >= max_splits:
-                        logger.info(f"Reached max splits limit ({max_splits}), stopping distribution")
+                # Get subitem deduction value from the appropriate column based on currency
+                subitem_deduction_value = 0
+                logger.debug(f"Subitem {subitem.get('name')} column values: {[{col['id']: col['value']} for col in subitem.get('column_values', [])]}")
+                for col in subitem.get("column_values", []):
+                    if col["id"] == deduction_column:
+                        try:
+                            raw_value = col["value"] or "0"
+                            clean_value = raw_value.strip('"') if isinstance(raw_value, str) else str(raw_value)
+                            subitem_deduction_value = float(clean_value)
+                            logger.debug(f"Found {deduction_column} value: {col['value']} -> {subitem_deduction_value}")
+                        except (ValueError, TypeError):
+                            subitem_deduction_value = 0
+                            logger.debug(f"Could not parse {deduction_column} value: {col['value']}")
                         break
-                    
-                    # Split required: numeric_mktm79z5 > numeric_mktzwbep
-                    logger.info(f"Subitem {subitem['name']} deduction {subitem_deduction_value} is greater than remaining {remaining_value} - splitting")
 
-                    # Get original name and values for splitting
-                    original_name = subitem['name']
-                    original_numeric_mktm79z5 = subitem_deduction_value
-                    
-                    # STEP 1: Update ORIGINAL subitem: numeric_mktm79z5 = numeric_mktzwbep (remaining_value)
-                    update_original_limit_response = update_subitem_column(subitem["id"], "numeric_mktm79z5", remaining_value, subitem_board_id)
-                    
-                    if update_original_limit_response and update_original_limit_response.get("data", {}).get("change_column_value", {}).get("id"):
-                        logger.info(f"Updated ORIGINAL subitem {subitem['name']} numeric_mktm79z5 from {original_numeric_mktm79z5} to {remaining_value}")
-                        
-                        # STEP 2: Update ORIGINAL subitem: numeric_mks6p0bv = numeric_mktzrf7x (numeric_value_to_save)
-                        update_original_numeric_response = update_subitem_column(subitem["id"], "numeric_mks6p0bv", numeric_value_to_save, subitem_board_id)
-                        
-                        if update_original_numeric_response and update_original_numeric_response.get("data", {}).get("change_column_value", {}).get("id"):
-                            logger.info(f"Updated ORIGINAL subitem {subitem['name']} numeric_mks6p0bv to {numeric_value_to_save}")
-                            
-                            # STEP 3: Duplicate ORIGINAL subitem to create PARTE 2
-                            part2_id = duplicate_subitem(subitem["id"], f"{original_name} - Parte 2")
+                # Process leftover if there's a deduction value
+                if subitem_deduction_value > 0:
+                    subitem_board_id = subitem.get("board", {}).get("id", "9431861361")
 
-                            if part2_id:
-                                # STEP 4: Update PARTE 2 numeric_mktm79z5 = old_original_numeric_mktm79z5 - current_original_numeric_mktm79z5
-                                part2_limit = original_numeric_mktm79z5 - remaining_value
-                                update_response_part2_limit = update_subitem_column(part2_id, "numeric_mktm79z5", part2_limit, subitem_board_id)
-
-                                if update_response_part2_limit and update_response_part2_limit.get("data", {}).get("change_column_value", {}).get("id"):
-                                    logger.info(f"Set PARTE 2 numeric_mktm79z5 to {part2_limit} ({original_numeric_mktm79z5} - {remaining_value})")
-                                    
-                                    # STEP 5: Update PARTE 2 numeric_mks6p0bv = numeric_mktzrf7x (numeric_value_to_save)
-                                    update_response_part2_numeric = update_subitem_column(part2_id, "numeric_mks6p0bv", numeric_value_to_save, subitem_board_id)
-                                    
-                                    if update_response_part2_numeric and update_response_part2_numeric.get("data", {}).get("change_column_value", {}).get("id"):
-                                        logger.info(f"Updated PARTE 2 numeric_mks6p0bv to {numeric_value_to_save}")
-                                        
-                                        # STEP 6: Rename ORIGINAL → "Original Subitem - Parte 1"
-                                        rename_query = """
-                                        mutation($boardId: ID!, $itemId: ID!, $value: String!) {
-                                            change_simple_column_value(board_id: $boardId, item_id: $itemId, column_id: "name", value: $value) {
-                                                id
-                                            }
-                                        }
-                                        """
-
-                                        rename_variables = {
-                                            "boardId": subitem_board_id,
-                                            "itemId": str(subitem["id"]),
-                                            "value": f"{original_name} - Parte 1"
-                                        }
-
-                                        rename_response = make_monday_api_request(rename_query, rename_variables)
-                                        
-                                        if rename_response and rename_response.get("data", {}).get("change_simple_column_value", {}).get("id"):
-                                            logger.info(f"Renamed ORIGINAL subitem to {original_name} - Parte 1")
-                                            
-                                            # All remaining value is consumed
-                                            remaining_value = 0
-
-                                            processed_subitems.append({
-                                                "id": subitem["id"],
-                                                "name": f"{original_name} - Parte 1",
-                                                "assigned_value": numeric_value_to_save,
-                                                "deducted_value": remaining_value  # Was remaining_value before being set to 0
-                                            })
-
-                                            processed_subitems.append({
-                                                "id": part2_id,
-                                                "name": f"{original_name} - Parte 2",
-                                                "assigned_value": numeric_value_to_save,
-                                                "deducted_value": part2_limit
-                                            })
-
-                                            logger.info(f"Split {original_name}: Parte 1 and Parte 2 both processed")
-                                            logger.info(f"Parte 1: numeric_mktm79z5={remaining_value}, numeric_mks6p0bv={numeric_value_to_save}")
-                                            logger.info(f"Parte 2: numeric_mktm79z5={part2_limit}, numeric_mks6p0bv={numeric_value_to_save}")
-
-                                            splits_created += 1
-                                            break  # Stop processing after first split to limit to 2 subitems
-                                        else:
-                                            logger.error(f"Failed to rename ORIGINAL subitem {subitem['name']} to Parte 1")
-                                            break
-                                    else:
-                                        logger.error(f"Failed to update PARTE 2 numeric_mks6p0bv for {subitem['name']}")
-                                        break
-                                else:
-                                    logger.error(f"Failed to update PARTE 2 numeric_mktm79z5 for split subitem {subitem['name']}")
-                                    break
-                            else:
-                                logger.error(f"Failed to duplicate subitem {subitem['name']}")
-                                break
+                    if leftover_remaining >= subitem_deduction_value:
+                        # Normal processing - leftover covers the deduction
+                        update_response = update_subitem_column(subitem["id"], "numeric_mks6p0bv", leftover_numeric_value, subitem_board_id)
+                        if update_response and update_response.get("data", {}).get("change_column_value", {}).get("id"):
+                            leftover_remaining -= subitem_deduction_value
                         else:
-                            logger.error(f"Failed to update ORIGINAL subitem {subitem['name']} numeric_mks6p0bv")
-                            break
-                    else:
-                        logger.error(f"Failed to update ORIGINAL subitem {subitem['name']} numeric_mktm79z5")
-                        break
-                else:
-                    # Normal processing - numeric_mktm79z5 <= numeric_mktzwbep, process like /distribuir
-                    logger.info(f"Subitem {subitem['name']} deduction {subitem_deduction_value} is <= remaining {remaining_value} - normal processing")
-                    
-                    # Update subitem numeric_mks6p0bv with the value to save
-                    update_response = update_subitem_column(subitem["id"], "numeric_mks6p0bv", numeric_value_to_save, subitem_board_id)
-                    if update_response and update_response.get("data", {}).get("change_column_value", {}).get("id"):
-                        # Deduct the subitem's deduction value from remaining
-                        remaining_value -= subitem_deduction_value
-                        
+                            logger.error(f"Failed to update subitem {subitem['name']}, skipping")
+                            continue
+
                         processed_subitems.append({
                             "id": subitem["id"],
                             "name": subitem["name"],
-                            "assigned_value": numeric_value_to_save,
-                            "deducted_value": subitem_deduction_value
+                            "assigned_value": leftover_numeric_value,
+                            "deducted_value": subitem_deduction_value,
+                            "source": "leftover"
                         })
-                        logger.info(f"Processed subitem {subitem['name']}: saved {numeric_value_to_save} to numeric_mks6p0bv, deducted {subitem_deduction_value}, remaining: {remaining_value}")
-                        
-                        # Continue to next subitem if there's still remaining value
-                        if remaining_value <= 0:
-                            logger.info(f"Remaining value is {remaining_value}, stopping distribution")
-                            break
-                    else:
-                        logger.error(f"Failed to update subitem {subitem['name']}, skipping")
-                        continue
-            else:
-                logger.info(f"Skipped subitem {subitem.get('name')}: no value in numeric_mktm79z5")
 
-        # If there's a remaining value and we processed at least one subitem, save it as RESERVA
-        if remaining_value > 0 and processed_subitems:
-            # Find the parent item in group_mks6z9xe with the same name to save RESERVA
-            parent_board_id = "9431708170"
-            
-            # Query to find the parent item in group_mks6z9xe
-            parent_query = f"""
-            query {{
-                boards(ids: {parent_board_id}) {{
-                    items_page(limit: 50, query_params: {{rules: [{{column_id: "group", compare_value: ["group_mks6z9xe"], operator: any_of}}]}}) {{
-                        items {{
-                            id
-                            name
-                        }}
-                    }}
-                }}
-            }}
-            """
-            
-            parent_response = make_monday_api_request(parent_query)
-            parent_item_to_update = None
-            
-            if parent_response and isinstance(parent_response, dict):
-                for board in parent_response.get("data", {}).get("boards", []):
-                    items_page = board.get("items_page", {})
-                    for item in items_page.get("items", []):
-                        if item.get("name") == item_name:
-                            parent_item_to_update = item.get("id")
-                            break
-                    if parent_item_to_update:
-                        break
-            
-            if parent_item_to_update:
-                # Update parent item with RESERVA value (numeric_mktzwbep) and last eligible numeric_mks6p0bv (numeric_mktzrf7x)
-                reserva_update_query = """
-                mutation($boardId: ID!, $itemId: ID!, $columnId: String!, $value: JSON!) {
-                    change_column_value(board_id: $boardId, item_id: $itemId, column_id: $columnId, value: $value) {
-                        id
-                    }
-                }
-                """
-                
-                # Update RESERVA value
-                reserva_variables = {
-                    "boardId": parent_board_id,
-                    "itemId": str(parent_item_to_update),
-                    "columnId": "numeric_mktzwbep",
-                    "value": str(remaining_value)
-                }
-                
-                reserva_response = make_monday_api_request(reserva_update_query, reserva_variables)
-                
-                # Update last eligible subitem's numeric_mks6p0bv value
-                cotacao_variables = {
-                    "boardId": parent_board_id,
-                    "itemId": str(parent_item_to_update),
-                    "columnId": "numeric_mktzrf7x",
-                    "value": str(last_eligible_numeric_mks6p0bv)
-                }
-                
-                cotacao_response = make_monday_api_request(reserva_update_query, cotacao_variables)
-                
-                if (reserva_response and reserva_response.get("data", {}).get("change_column_value", {}).get("id") and
-                    cotacao_response and cotacao_response.get("data", {}).get("change_column_value", {}).get("id")):
-                    logger.info(f"Saved RESERVA {remaining_value} and last eligible value {last_eligible_numeric_mks6p0bv} to parent item {item_name} (ID: {parent_item_to_update})")
+                        logger.info(f"PHASE 1: Processed subitem {subitem['name']}: copied {leftover_numeric_value} to numeric_mks6p0bv, deducted {subitem_deduction_value}, leftover remaining: {leftover_remaining}")
+
+                        # Remove this specific subitem by ID from unprocessed list since it's done
+                        unprocessed_subitems = [s for s in unprocessed_subitems if s["id"] != subitem["id"]]
+
+                        if leftover_remaining <= 0:
+                            leftover_finished = True
+                            phase1_complete = True
+
+                    else:
+                        # Leftover is not enough - need to duplicate and split
+                        logger.info(f"PHASE 1: Leftover remaining {leftover_remaining} is not enough for subitem {subitem['name']} deduction {subitem_deduction_value} - splitting")
+
+                        # Duplicate the subitem to create Part 1 first, then Part 2
+                        part1_id = duplicate_subitem(subitem["id"], f"{subitem['name']} Parte 1")
+                        part2_id = duplicate_subitem(subitem["id"], f"{subitem['name']} Parte 2")
+
+                        if part1_id and part2_id:
+                            # Part 1 gets the remaining leftover and gets processed
+                            update_response_part1_deduction = update_subitem_column(part1_id, deduction_column, leftover_remaining, subitem_board_id)
+                            update_response_part1_numeric = update_subitem_column(part1_id, "numeric_mks6p0bv", leftover_numeric_value, subitem_board_id)
+
+                            if not (update_response_part1_deduction and update_response_part1_deduction.get("data", {}).get("change_column_value", {}).get("id")) or \
+                               not (update_response_part1_numeric and update_response_part1_numeric.get("data", {}).get("change_column_value", {}).get("id")):
+                                logger.error(f"Failed to update Part 1 of split subitem {subitem['name']}")
+                                phase1_complete = True  # Stop on error
+                            else:
+                                # Part 2 gets the difference (not processed yet, will be handled in PHASE 2)
+                                part2_deduction = subitem_deduction_value - leftover_remaining
+                                update_response_part2_deduction = update_subitem_column(part2_id, deduction_column, part2_deduction, subitem_board_id)
+
+                                if not (update_response_part2_deduction and update_response_part2_deduction.get("data", {}).get("change_column_value", {}).get("id")):
+                                    logger.error(f"Failed to update Part 2 of split subitem {subitem['name']}")
+                                else:
+                                    # Delete the original subitem
+                                    if delete_item(subitem["id"], subitem_board_id):
+                                        logger.info(f"Deleted original subitem {subitem['name']} (ID: {subitem['id']})")
+
+                                    processed_subitems.append({
+                                        "id": part1_id,
+                                        "name": f"{subitem['name']} Parte 1",
+                                        "assigned_value": leftover_numeric_value,
+                                        "deducted_value": leftover_remaining,
+                                        "source": "leftover"
+                                    })
+
+                                    # Add Part 2 to the beginning of unprocessed list for PHASE 2
+                                    part2_subitem = {
+                                        "id": part2_id,
+                                        "name": f"{subitem['name']} Parte 2",
+                                        "board": {"id": subitem_board_id},
+                                        "column_values": [
+                                            {"id": deduction_column, "value": f'"{part2_deduction}"'},
+                                            {"id": "color_mks7xmpz", "value": subitem.get("column_values", [{}])[0].get("value", "")} # Assuming status is the first value
+                                        ]
+                                    }
+                                    unprocessed_subitems.insert(0, part2_subitem)
+                                    # Remove the original subitem by ID (not by object reference)
+                                    unprocessed_subitems = [s for s in unprocessed_subitems if s["id"] != subitem["id"]]
+
+                                    logger.info(f"PHASE 1: Created {subitem['name']} Parte 1 (processed) and Parte 2 (pending)")
+                                    logger.info(f"Parte 1: {deduction_column}={leftover_remaining}, numeric_mks6p0bv={leftover_numeric_value}")
+                                    logger.info(f"Parte 2: {deduction_column}={part2_deduction} - will be processed in PHASE 2")
+
+                                    # Leftover is exhausted
+                                    leftover_remaining = 0
+                                    leftover_finished = True
+                                    phase1_complete = True
+                        else:
+                            logger.error(f"Failed to duplicate subitem {subitem['name']}")
+                            phase1_complete = True  # Stop on error
                 else:
-                    logger.error(f"Failed to save RESERVA to parent item {item_name}")
+                    logger.info(f"PHASE 1: Skipped subitem {subitem.get('name')}: no deduction value")
+
+            logger.info(f"PHASE 1 COMPLETE: Leftover processing finished. Remaining leftover: {leftover_remaining}")
+        else:
+            leftover_finished = True
+            logger.info("PHASE 1 SKIPPED: No leftover sum to process")
+
+        # PHASE 2: Process webhook values (only after leftover is completely finished)
+        if leftover_finished and limit_value > 0:
+            logger.info(f"PHASE 2: Processing webhook values with limit_value {limit_value} and numeric_value {numeric_value}")
+            webhook_remaining = limit_value
+
+            # Create a separate copy to avoid modification during iteration
+            subitems_to_process = unprocessed_subitems[:]
+            phase2_complete = False
+
+            for subitem in subitems_to_process:
+                if phase2_complete or webhook_remaining <= 0:
+                    logger.info("Webhook limit_value exhausted, PHASE 2 complete")
+                    break
+
+                # Get subitem deduction value from the appropriate column based on currency
+                subitem_deduction_value = 0
+                for col in subitem.get("column_values", []):
+                    if col["id"] == deduction_column:
+                        try:
+                            raw_value = col["value"] or "0"
+                            clean_value = raw_value.strip('"') if isinstance(raw_value, str) else str(raw_value)
+                            subitem_deduction_value = float(clean_value)
+                        except (ValueError, TypeError):
+                            subitem_deduction_value = 0
+                        break
+
+                # Process webhook if there's a deduction value
+                if subitem_deduction_value > 0:
+                    subitem_board_id = subitem.get("board", {}).get("id", "9431861361")
+
+                    if webhook_remaining >= subitem_deduction_value:
+                        # Normal processing - webhook value covers the deduction
+                        update_response = update_subitem_column(subitem["id"], "numeric_mks6p0bv", numeric_value, subitem_board_id)
+                        if update_response and update_response.get("data", {}).get("change_column_value", {}).get("id"):
+                            webhook_remaining -= subitem_deduction_value
+                        else:
+                            logger.error(f"Failed to update subitem {subitem['name']}, skipping")
+                            continue
+
+                        processed_subitems.append({
+                            "id": subitem["id"],
+                            "name": subitem["name"],
+                            "assigned_value": numeric_value,
+                            "deducted_value": subitem_deduction_value,
+                            "source": "webhook"
+                        })
+
+                        logger.info(f"PHASE 2: Processed subitem {subitem['name']}: copied {numeric_value} to numeric_mks6p0bv, deducted {subitem_deduction_value}, webhook remaining: {webhook_remaining}")
+
+                        if webhook_remaining <= 0:
+                            phase2_complete = True
+
+                    else:
+                        # Webhook remaining is not enough - need to duplicate and split
+                        logger.info(f"PHASE 2: Webhook remaining {webhook_remaining} is not enough for subitem {subitem['name']} deduction {subitem_deduction_value} - splitting")
+
+                        # Duplicate the subitem to create Part 1 first, then Part 2
+                        part1_id = duplicate_subitem(subitem["id"], f"{subitem['name']} Parte 1")
+                        part2_id = duplicate_subitem(subitem["id"], f"{subitem['name']} Parte 2")
+
+                        if part1_id and part2_id:
+                            # Part 1 gets the remaining webhook value and gets processed
+                            update_response_part1_deduction = update_subitem_column(part1_id, deduction_column, webhook_remaining, subitem_board_id)
+                            update_response_part1_numeric = update_subitem_column(part1_id, "numeric_mks6p0bv", numeric_value, subitem_board_id)
+
+                            if not (update_response_part1_deduction and update_response_part1_deduction.get("data", {}).get("change_column_value", {}).get("id")) or \
+                               not (update_response_part1_numeric and update_response_part1_numeric.get("data", {}).get("change_column_value", {}).get("id")):
+                                logger.error(f"Failed to update Part 1 of split subitem {subitem['name']}")
+                                phase2_complete = True  # Stop on error
+                            else:
+                                # Part 2 gets the difference (not processed)
+                                part2_deduction = subitem_deduction_value - webhook_remaining
+                                update_response_part2_deduction = update_subitem_column(part2_id, deduction_column, part2_deduction, subitem_board_id)
+
+                                if not (update_response_part2_deduction and update_response_part2_deduction.get("data", {}).get("change_column_value", {}).get("id")):
+                                    logger.error(f"Failed to update Part 2 of split subitem {subitem['name']}")
+                                else:
+                                    # Delete the original subitem
+                                    if delete_item(subitem["id"], subitem_board_id):
+                                        logger.info(f"Deleted original subitem {subitem['name']} (ID: {subitem['id']})")
+
+                                    processed_subitems.append({
+                                        "id": part1_id,
+                                        "name": f"{subitem['name']} Parte 1",
+                                        "assigned_value": numeric_value,
+                                        "deducted_value": webhook_remaining,
+                                        "source": "webhook"
+                                    })
+
+                                    processed_subitems.append({
+                                        "id": part2_id,
+                                        "name": f"{subitem['name']} Parte 2",
+                                        "assigned_value": 0,  # Not processed
+                                        "deducted_value": part2_deduction,
+                                        "source": "pending"
+                                    })
+
+                                    logger.info(f"PHASE 2: Created {subitem['name']} Parte 1 (processed) and Parte 2 (pending)")
+                                    logger.info(f"Parte 1: {deduction_column}={webhook_remaining}, numeric_mks6p0bv={numeric_value}")
+                                    logger.info(f"Parte 2: {deduction_column}={part2_deduction} - not processed")
+
+                                    # Webhook value is exhausted
+                                    webhook_remaining = 0
+                                    phase2_complete = True
+                        else:
+                            logger.error(f"Failed to duplicate subitem {subitem['name']}")
+                            phase2_complete = True  # Stop on error
+                else:
+                    logger.info(f"PHASE 2: Skipped subitem {subitem.get('name')}: no deduction value")
+
+            logger.info(f"PHASE 2 COMPLETE: Webhook processing finished. Remaining webhook value: {webhook_remaining}")
+        else:
+            webhook_remaining = 0
+            logger.info("PHASE 2 SKIPPED: No webhook limit_value to process or leftover not finished")
+
+
+
+        # Calculate remaining value based on the phases
+        remaining_value = 0
+        if leftover_finished and limit_value > 0:
+            remaining_value = webhook_remaining
+        elif leftover_sum > 0 and not leftover_finished:
+            remaining_value = leftover_remaining
+
+        # If there's a remaining value and we processed at least one subitem, save it to the last processed subitem
+        if remaining_value > 0 and processed_subitems:
+            last_processed = processed_subitems[-1]
+            subitem_board_id = "9431861361"  # Default subitem board ID
+
+            # Save the leftover sum to the numeric_mksxv8ep column of the last processed subitem
+            update_response = update_subitem_column(last_processed["id"], "numeric_mksxv8ep", remaining_value, subitem_board_id)
+            if update_response and update_response.get("data", {}).get("change_column_value", {}).get("id"):
+                logger.info(f"Saved leftover sum {remaining_value} to subitem {last_processed['name']} (ID: {last_processed['id']}) in column numeric_mksxv8ep")
             else:
-                logger.error(f"Could not find parent item {item_name} in group_mks6z9xe to save RESERVA")
+                logger.error(f"Failed to save leftover sum to subitem {last_processed['name']}")
 
         # Store operation state
         operation_state[item_id] = {
             "timestamp": datetime.now().isoformat(),
             "processed_subitems": processed_subitems,
             "remaining_value": remaining_value,
-            "reserva_saved": remaining_value > 0 and processed_subitems
+            "leftover_saved": remaining_value > 0 and processed_subitems
         }
 
         return {
             "message": "Values distributed successfully",
             "processed_subitems": processed_subitems,
             "remaining_value": remaining_value,
-            "reserva_saved": remaining_value > 0 and processed_subitems
+            "leftover_saved_to_subitem": processed_subitems[-1]["name"] if remaining_value > 0 and processed_subitems else None
         }, 200
 
     except Exception as e:
@@ -1301,8 +1454,8 @@ def somar_entradas():
 @app.route('/atualizarreservadecambio', methods=['POST'])
 def atualizar_reserva_de_cambio():
     """
-    Webhook endpoint for using RESERVA values for distribution
-    Checks for RESERVA values in parent item and uses them for distribution like /distribuir
+    Webhook endpoint for updating reserve values and distributing
+    Checks for RESERVA values in subitems and transfers them before distribution
     """
     try:
         # Validate request
@@ -1326,16 +1479,20 @@ def atualizar_reserva_de_cambio():
 
         # Extract parentItemId from Monday.com webhook payload
         parent_item_id = None
+        subitem_id = None
 
         # Handle Monday.com webhook format
         if "event" in payload and "parentItemId" in payload["event"]:
             parent_item_id = payload["event"]["parentItemId"]
+            subitem_id = payload["event"].get("pulseId", "")
         elif "event" in payload and "data" in payload["event"]:
             # Current webhook format with nested data
             event_data = payload["event"]["data"]
             parent_item_id = event_data.get("parent_item", "")
+            subitem_id = event_data.get("item_id", "")
         elif "parent_item" in payload:
             parent_item_id = payload["parent_item"].get("id", "")
+            subitem_id = payload.get("id", "")
         else:
             logger.error("Could not extract parentItemId from webhook payload")
             return jsonify({"error": "parentItemId field is required"}), 400
@@ -1379,116 +1536,159 @@ def atualizar_reserva_de_cambio():
             logger.error("Parent item name is empty")
             return jsonify({"error": "Parent item name cannot be empty"}), 400
 
-        # Check for RESERVA values in the parent item in group_mks6z9xe
+        # Query Monday.com to get the actual parent item data with required columns
+        item_data = get_item_data(parent_item_id, item_name)
+
+        if not item_data or not isinstance(item_data, dict): # Added check for dict type
+            logger.error("Could not retrieve parent item data or data is not a dictionary")
+            return jsonify({"error": "Could not retrieve parent item data"}), 400
+
+        # Get subitems from the parent item with same name in group_mks6z9xe
         group_id = "group_mks6z9xe"
-        parent_board_id = "9431708170"
-        
-        # Query to find the parent item in group_mks6z9xe and get its RESERVA values plus currency status
-        parent_query = f"""
-        query {{
-            boards(ids: {parent_board_id}) {{
-                items_page(limit: 50, query_params: {{rules: [{{column_id: "group", compare_value: ["{group_id}"], operator: any_of}}]}}) {{
-                    items {{
-                        id
-                        name
-                        column_values(ids: ["numeric_mktzwbep", "numeric_mktzrf7x", "color_mks7xywc"]) {{
-                            id
-                            value
-                        }}
-                    }}
-                }}
-            }}
-        }}
-        """
-        
-        parent_response = make_monday_api_request(parent_query)
-        
+        logger.info(f"Looking for parent item '{item_name}' in group '{group_id}' to check for RESERVA values")
+        subitems = get_subitems_by_group_and_name(group_id, item_name)
+
+        if not subitems:
+            logger.warning(f"No subitems found for parent item '{item_name}' in group '{group_id}'")
+            return {"message": f"No subitems found for parent item '{item_name}' in group '{group_id}'"}, 200
+
+        # Check for RESERVA values (numeric_mksxv8ep) in subitems
         reserva_found = False
         reserva_value = 0
-        cotacao_value = 0
-        currency_status = ""
-        parent_item_with_reserva = None
-        
-        if parent_response and isinstance(parent_response, dict):
-            for board in parent_response.get("data", {}).get("boards", []):
-                items_page = board.get("items_page", {})
-                for item in items_page.get("items", []):
-                    if item.get("name") == item_name:
-                        # Check for RESERVA, cotacao and currency values
+        source_numeric_value = 0
+        source_subitem_id = None
+
+        for subitem in subitems:
+            current_reserva = 0
+            current_numeric = 0
+
+            for col in subitem.get("column_values", []):
+                if col["id"] == "numeric_mksxv8ep":  # RESERVA column
+                    try:
+                        value_str = col["value"] or "0"
+                        if value_str.startswith('"') and value_str.endswith('"'):
+                            value_str = value_str[1:-1]
+                        current_reserva = float(value_str)
+                    except (ValueError, TypeError):
                         current_reserva = 0
-                        current_cotacao = 0
-                        current_currency = ""
-                        
-                        for col in item.get("column_values", []):
-                            if col["id"] == "numeric_mktzwbep":  # RESERVA column
-                                try:
-                                    value_str = col["value"] or "0"
-                                    if value_str.startswith('"') and value_str.endswith('"'):
-                                        value_str = value_str[1:-1]
-                                    current_reserva = float(value_str)
-                                except (ValueError, TypeError):
-                                    current_reserva = 0
-                            elif col["id"] == "numeric_mktzrf7x":  # Cotacao column
-                                try:
-                                    value_str = col["value"] or "0"
-                                    if value_str.startswith('"') and value_str.endswith('"'):
-                                        value_str = value_str[1:-1]
-                                    current_cotacao = float(value_str)
-                                except (ValueError, TypeError):
-                                    current_cotacao = 0
-                            elif col["id"] == "color_mks7xywc":  # Currency status column
-                                current_currency = col["value"] or ""
-                        
-                        if current_reserva > 0:
-                            reserva_found = True
-                            reserva_value = current_reserva
-                            cotacao_value = current_cotacao
-                            currency_status = current_currency
-                            parent_item_with_reserva = item.get("id")
-                            logger.info(f"Found RESERVA {reserva_value} in parent item {item_name} with cotacao {cotacao_value}")
-                            break
-                if reserva_found:
-                    break
+                elif col["id"] == "numeric_mks6p0bv":  # Source numeric value
+                    try:
+                        value_str = col["value"] or "0"
+                        if value_str.startswith('"') and value_str.endswith('"'):
+                            value_str = value_str[1:-1]
+                        current_numeric = float(value_str)
+                    except (ValueError, TypeError):
+                        current_numeric = 0
+
+            if current_reserva > 0:
+                reserva_found = True
+                reserva_value = current_reserva
+                source_numeric_value = current_numeric
+                source_subitem_id = subitem["id"]
+                logger.info(f"Found RESERVA {reserva_value} in subitem {subitem['name']} with numeric value {source_numeric_value}")
+                break
 
         if not reserva_found:
-            logger.info("No RESERVA values found in parent item - nothing to do")
-            return jsonify({"message": "No RESERVA values found in parent item"}), 200
+            logger.info("No RESERVA values found in subitems - nothing to do")
+            return jsonify({"message": "No RESERVA values found in subitems"}), 200
 
-        # Create item_data structure similar to what distribute_values expects
-        # Use the RESERVA value as the limit to distribute (numeric_mks61nvq)
-        # Use the cotacao value as the value to save to eligible subitems (numeric_mksxcdva)
-        item_data = {
-            "id": parent_item_id,
-            "name": item_name,
-            "numeric_mks61nvq": reserva_value,  # Use RESERVA as limit
-            "numeric_mksxcdva": cotacao_value,  # Use cotacao as value to save
-            "color_mks7xywc": currency_status   # Use parent's currency status
+        # Transfer the numeric value from the subitem with RESERVA to the webhook item
+        logger.info(f"Transferring numeric value {source_numeric_value} from subitem to webhook item {item_name}")
+
+        # Update the webhook item's numeric_mks6p0bv column with the source value
+        update_query = """
+        mutation($boardId: ID!, $itemId: ID!, $columnId: String!, $value: JSON!) {
+            change_column_value(board_id: $boardId, item_id: $itemId, column_id: $columnId, value: $value) {
+                id
+            }
+        }
+        """
+
+        update_variables = {
+            "boardId": "9431708170",  # Parent item board
+            "itemId": str(parent_item_id),
+            "columnId": "numeric_mks6p0bv",
+            "value": str(source_numeric_value)
         }
 
-        logger.info(f"Using RESERVA for distribution - Limit: {reserva_value}, Value to save: {cotacao_value}")
+        update_response = make_monday_api_request(update_query, update_variables)
+
+        if not update_response or not isinstance(update_response, dict):
+            logger.error(f"Invalid response from Monday API for update: {update_response}")
+            return jsonify({"error": "Failed to transfer value to webhook item"}), 500
+
+        if not update_response.get("data", {}).get("change_column_value", {}).get("id"):
+            logger.error(f"Failed to update webhook item {item_name} with transferred value")
+            return jsonify({"error": "Failed to transfer value to webhook item"}), 500
+
+        logger.info(f"Successfully transferred value {source_numeric_value} to webhook item {item_name}")
+
+        # Clear the RESERVA value from the source subitem
+        subitem_board_id = "9431861361"  # Default subitem board ID
+        try:
+            logger.info(f"About to clear RESERVA value from subitem {source_subitem_id} using board {subitem_board_id}")
+            clear_response = update_subitem_column(source_subitem_id, "numeric_mksxv8ep", 0, subitem_board_id)
+            logger.info(f"Clear RESERVA response received: {clear_response}")
+            
+            if clear_response is None:
+                logger.error(f"Failed to clear RESERVA value from source subitem {source_subitem_id}: response was None")
+            elif not isinstance(clear_response, dict):
+                logger.error(f"Failed to clear RESERVA value from source subitem {source_subitem_id}: response is not a dict: {type(clear_response)}")
+            elif clear_response.get("data", {}).get("change_column_value", {}).get("id"):
+                logger.info(f"Successfully cleared RESERVA value from source subitem {source_subitem_id}")
+            else:
+                logger.error(f"Failed to clear RESERVA value from source subitem {source_subitem_id}: {clear_response}")
+        except Exception as e:
+            logger.error(f"Failed to clear RESERVA value: {e}")
+            import traceback
+            logger.error(f"Clear RESERVA traceback: {traceback.format_exc()}")
+            # Continue anyway, as the main transfer was successful
+
+        # Update item_data with the transferred value to use in distribution
+        item_data["numeric_mks63qc1"] = source_numeric_value
+
+        # Ensure item_data has all required fields for distribution
+        required_fields = ["id", "name", "numeric_mks63qc1", "numeric_mks64nh2", "color_mks7xywc", "numeric_mks61nvq"]
+        missing_fields = [field for field in required_fields if field not in item_data]
+
+        if missing_fields:
+            logger.error(f"Item data missing fields for distribution: {missing_fields}. Current item_data: {item_data}")
+            return jsonify({
+                "error": f"Item data missing required fields: {missing_fields}",
+                "transferred_value": source_numeric_value,
+                "reserva_cleared": reserva_value
+            }), 500
 
         # Validate that we have the required data for distribution (status column must have a value)
-        if not currency_status:
-            logger.info(f"Parent item {item_name} has no status value set, skipping distribution")
-            return jsonify({"message": "No status value set for distribution"}), 200
+        if not item_data.get("color_mks7xywc"):
+            logger.info(f"Item {item_name} has no status value set, skipping distribution after transfer")
+            return jsonify({
+                "message": "Value transferred but no status value set for distribution",
+                "transferred_value": source_numeric_value,
+                "reserva_cleared": reserva_value
+            }), 200
 
-        if reserva_value <= 0:
-            logger.info(f"Parent item {item_name} has no RESERVA value to distribute")
-            return jsonify({"message": "No RESERVA value to distribute"}), 200
+        if item_data.get("numeric_mks63qc1", 0) <= 0:
+            logger.info(f"Item {item_name} has no value to distribute after transfer")
+            return jsonify({
+                "message": "Value transferred but no value to distribute",
+                "transferred_value": source_numeric_value,
+                "reserva_cleared": reserva_value
+            }), 200
+
+        logger.info(f"Starting distribution with item_data: {item_data}")
 
         # Process the distribution using the same logic as /distribuir
-        # This will handle splitting, saving new RESERVA values, etc.
-        # Limit to 1 split maximum (creates only 2 parts)
         try:
-            distribution_result = distribute_values(item_data, max_splits=1)
+            distribution_result = distribute_values(item_data)
 
             # Handle the case where distribute_values returns None or invalid data
             if distribution_result is None:
                 logger.error("distribute_values returned None")
                 return jsonify({
                     "error": "Distribution function returned None",
-                    "reserva_used": reserva_value,
-                    "cotacao_used": cotacao_value
+                    "transferred_value": source_numeric_value,
+                    "reserva_cleared": reserva_value
                 }), 500
 
             # distribute_values returns a tuple (result, status_code)
@@ -1496,8 +1696,8 @@ def atualizar_reserva_de_cambio():
                 logger.error(f"distribute_values returned invalid format: {type(distribution_result)}")
                 return jsonify({
                     "error": "Distribution function returned invalid format",
-                    "reserva_used": reserva_value,
-                    "cotacao_used": cotacao_value
+                    "transferred_value": source_numeric_value,
+                    "reserva_cleared": reserva_value
                 }), 500
 
             result, status_code = distribution_result
@@ -1507,8 +1707,8 @@ def atualizar_reserva_de_cambio():
                 logger.error("distribute_values returned None as result")
                 return jsonify({
                     "error": "Distribution function returned None result",
-                    "reserva_used": reserva_value,
-                    "cotacao_used": cotacao_value
+                    "transferred_value": source_numeric_value,
+                    "reserva_cleared": reserva_value
                 }), 500
 
         except Exception as e:
@@ -1517,79 +1717,24 @@ def atualizar_reserva_de_cambio():
             logger.error(f"Traceback: {traceback.format_exc()}")
             return jsonify({
                 "error": f"Distribution failed: {str(e)}",
-                "reserva_used": reserva_value,
-                "cotacao_used": cotacao_value
+                "transferred_value": source_numeric_value,
+                "reserva_cleared": reserva_value
             }), 500
 
-        # Only clear original RESERVA values if there was splitting (no remaining value)
-        # When there's normal processing with remainder, keep the RESERVA values 
-        should_clear_reserva = True
-        if isinstance(result, dict) and result.get("remaining_value", 0) > 0:
-            # If there's a remaining value, it means normal processing occurred and RESERVA should be preserved
-            should_clear_reserva = False
-            logger.info(f"Preserving RESERVA values as remaining value {result.get('remaining_value')} > 0")
-        
-        if should_clear_reserva:
-            try:
-                logger.info(f"Clearing original RESERVA values from parent item {parent_item_with_reserva}")
-                
-                # Clear original RESERVA value (numeric_mktzwbep)
-                clear_reserva_query = """
-                mutation($boardId: ID!, $itemId: ID!, $columnId: String!, $value: JSON!) {
-                    change_column_value(board_id: $boardId, item_id: $itemId, column_id: $columnId, value: $value) {
-                        id
-                    }
-                }
-                """
-                
-                # Clear original RESERVA (set to 0)
-                clear_reserva_variables = {
-                    "boardId": parent_board_id,
-                    "itemId": str(parent_item_with_reserva),
-                    "columnId": "numeric_mktzwbep",
-                    "value": "0"
-                }
-                
-                clear_reserva_response = make_monday_api_request(clear_reserva_query, clear_reserva_variables)
-                
-                # Clear original cotacao (set to 0)
-                clear_cotacao_variables = {
-                    "boardId": parent_board_id,
-                    "itemId": str(parent_item_with_reserva),
-                    "columnId": "numeric_mktzrf7x", 
-                    "value": "0"
-                }
-                
-                clear_cotacao_response = make_monday_api_request(clear_reserva_query, clear_cotacao_variables)
-                
-                if (clear_reserva_response and clear_reserva_response.get("data", {}).get("change_column_value", {}).get("id") and
-                    clear_cotacao_response and clear_cotacao_response.get("data", {}).get("change_column_value", {}).get("id")):
-                    logger.info(f"Successfully cleared original RESERVA and cotacao values from parent item {parent_item_with_reserva}")
-                else:
-                    logger.error(f"Failed to clear original RESERVA values from parent item {parent_item_with_reserva}")
-            except Exception as e:
-                logger.error(f"Failed to clear original RESERVA values: {e}")
-                import traceback
-                logger.error(f"Clear RESERVA traceback: {traceback.format_exc()}")
-                # Continue anyway, as the main distribution was successful
-        else:
-            logger.info(f"Keeping original RESERVA values as remainder exists: numeric_mktzwbep and numeric_mktzrf7x preserved")
-
-        # Add RESERVA information to the result
+        # Add transfer information to the result
         if isinstance(result, dict):
-            result["used_reserva"] = {
-                "source_parent_item_id": parent_item_with_reserva,
-                "original_reserva_value": reserva_value,
-                "original_cotacao_value": cotacao_value,
-                "original_reserva_cleared": True
+            result["transferred_from_reserva"] = {
+                "source_subitem_id": source_subitem_id,
+                "transferred_value": source_numeric_value,
+                "reserva_cleared": reserva_value
             }
         else:
             logger.error(f"Expected dict result from distribute_values, got: {type(result)}")
             return jsonify({
                 "error": "Invalid result from distribution",
                 "result_type": str(type(result)),
-                "reserva_used": reserva_value,
-                "cotacao_used": cotacao_value
+                "transferred_value": source_numeric_value,
+                "reserva_cleared": reserva_value
             }), 500
 
         return jsonify(result), status_code
@@ -1602,7 +1747,6 @@ def atualizar_reserva_de_cambio():
 def distribuir():
     """
     Main webhook endpoint for Monday.com payloads
-    Distributes numeric_mks61nvq value and saves numeric_mksxcdva to eligible subitems
     """
     try:
         # Validate request
@@ -1653,7 +1797,7 @@ def distribuir():
         # Query Monday.com to get the actual item data with required columns
         item_data = get_item_data(item_id, item_name)
 
-        if not item_data or not isinstance(item_data, dict):
+        if not item_data or not isinstance(item_data, dict): # Added check for dict type
             logger.error("Could not retrieve item data or data is not a dictionary")
             return jsonify({"error": "Could not retrieve item data"}), 400
 
@@ -1662,10 +1806,9 @@ def distribuir():
             logger.info(f"Item {item_name} has no status value set, skipping processing")
             return jsonify({"message": "No status value set, skipping processing"}), 200
 
-        # Check if we have values to distribute
-        if item_data.get("numeric_mks61nvq", 0) <= 0:
-            logger.info(f"Item {item_name} has no limit value (numeric_mks61nvq) to distribute")
-            return jsonify({"message": "No limit value to distribute"}), 200
+        if item_data.get("numeric_mks63qc1", 0) <= 0:
+            logger.info(f"Item {item_name} has no value to distribute")
+            return jsonify({"message": "No value to distribute"}), 200
 
         # Process the distribution
         result, status_code = distribute_values(item_data)
